@@ -33,3 +33,8 @@ server.on('listening', () => {
 process.on('unhandledRejection', err => {
   console.log(err.stack)
 })
+
+process.on('SIGTERM', () =>
+  server.quit('Server restarting')
+    .then(() => process.exit(0))
+)
