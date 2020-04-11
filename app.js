@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const mcServer = require('./')
-
+const notify = require('sd-notify')
 const defaultSettings = require('./config/default-settings')
 
 let settings
@@ -18,7 +18,17 @@ try {
   settings = defaultSettings
 }
 
-module.exports = mcServer.createMCServer(settings)
+const server = mcServer.createMCServer(settings)
+
+module.exports = server
+
+server.on('listening', () => {
+  notify.ready()
+  const watchdogInterval = notify.watchdogInterval()
+  if (watchdogInterval) {
+    notify.startWatchdogMode(watchdogInterval >> 1)
+  }
+})
 
 process.on('unhandledRejection', err => {
   console.log(err.stack)

@@ -43,6 +43,7 @@
     "range": "^0.0.3",
     "request": "^2.83.0",
     "request-promise": "^4.1.0",
+    "sd-notify": "^2.8.0",
     "spiralloop": "^1.0.2",
     "uuid-1345": "^0.99.6",
     "vec3": "^0.1.3"
