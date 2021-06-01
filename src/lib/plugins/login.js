@@ -1,9 +1,12 @@
+/* global BigInt */
 const Vec3 = require('vec3').Vec3
 
 const path = require('path')
+const crypto = require('crypto')
 const requireIndex = require('../requireindex')
 const plugins = requireIndex(path.join(__dirname, '..', 'plugins'))
-const Command = require('flying-squid').Command
+const playerDat = require('../playerDat')
+const convertInventorySlotId = require('../convertInventorySlotId')
 
 module.exports.server = function (serv, options) {
   serv._server.on('connection', client =>
@@ -16,7 +19,7 @@ module.exports.server = function (serv, options) {
       player._client = client
 
       player.profileProperties = player._client.profile ? player._client.profile.properties : []
-      player.commands = new Command({})
+
       Object.keys(plugins)
         .filter(pluginName => plugins[pluginName].player !== undefined)
         .forEach(pluginName => plugins[pluginName].player(player, serv, options))
@@ -28,21 +31,55 @@ module.exports.server = function (serv, options) {
       setTimeout(() => { throw err }, 0)
     }
   })
+
+  serv.hashedSeed = [0, 0]
+  serv.on('seed', (seed) => {
+    const seedBuf = Buffer.allocUnsafe(8)
+    seedBuf.writeBigInt64LE(BigInt(seed))
+    const seedHash = crypto.createHash('sha256').update(seedBuf).digest().subarray(0, 8).readBigInt64LE()
+    serv.hashedSeed = [Number(BigInt.asIntN(64, seedHash) < 0 ? -(BigInt.asUintN(32, (-seedHash) >> 32n) + 1n) : seedHash >> 32n), Number(BigInt.asIntN(32, seedHash & (2n ** 32n - 1n)))] // convert BigInt to mcpc long
+  })
 }
 
-module.exports.player = function (player, serv, settings) {
-  function addPlayer () {
+module.exports.player = async function (player, serv, settings) {
+  const Item = require('prismarine-item')(settings.version)
+  const mcData = require('minecraft-data')(settings.version)
+
+  let playerData
+
+  async function addPlayer () {
     player.type = 'player'
-    player.health = 20
-    player.food = 20
     player.crouching = false // Needs added in prismarine-entity later
     player.op = settings['everybody-op'] // REMOVE THIS WHEN OUT OF TESTING
     player.username = player._client.username
     player.uuid = player._client.uuid
+
+    await player.findSpawnPoint()
+
+    playerData = await playerDat.read(player.uuid, player.spawnPoint, settings.worldFolder)
+    Object.keys(playerData.player).forEach(k => { player[k] = playerData.player[k] })
+
     serv.players.push(player)
     serv.uuidToPlayer[player.uuid] = player
-    player.heldItemSlot = 0
     player.loadedChunks = {}
+  }
+
+  function updateInventory () {
+    playerData.inventory.forEach((item) => {
+      let theItem
+      const itemName = item.id.value.slice(10)
+      if (mcData.itemsByName[itemName]) {
+        theItem = mcData.itemsByName[itemName]
+      } else {
+        theItem = mcData.blocksByName[itemName]
+      }
+      const newItem = new Item(theItem.id, item.Count.value, item.Damage.value)
+      const slot = convertInventorySlotId.fromNBT(item.Slot.value)
+      player.inventory.updateSlot(slot, newItem)
+    })
+    player._client.write('held_item_slot', {
+      slot: player.heldItemSlot
+    })
   }
 
   function sendLogin () {
@@ -51,17 +88,44 @@ module.exports.player = function (player, serv, settings) {
       entityId: player.id,
       levelType: 'default',
       gameMode: player.gameMode,
-      dimension: 0,
+      previousGameMode: player.prevGameMode,
+      worldNames: Object.values(serv.dimensionNames),
+      dimensionCodec: dimensionCodec,
+      worldName: serv.dimensionNames[0],
+      dimension: serv.supportFeature('dimensionIsAString') ? serv.dimensionNames[0] : 0,
+      hashedSeed: serv.hashedSeed,
       difficulty: serv.difficulty,
+      viewDistance: settings['view-distance'],
       reducedDebugInfo: false,
-      maxPlayers: serv._server.maxPlayers
+      maxPlayers: Math.min(255, serv._server.maxPlayers),
+      enableRespawnScreen: true,
+      isDebug: false,
+      isFlat: false
     })
-    player.position = player.spawnPoint.clone()
+    if (serv.supportFeature('difficultySentSeparately')) {
+      player._client.write('difficulty', {
+        difficulty: serv.difficulty,
+        difficultyLocked: false
+      })
+    }
   }
 
   function sendChunkWhenMove () {
     player.on('move', () => {
       if (!player.sendingChunks && player.position.distanceTo(player.lastPositionChunkUpdated) > 16) { player.sendRestMap() }
+      if (!serv.supportFeature('updateViewPosition')) {
+        return
+      }
+      const chunkX = Math.floor(player.position.x / 16)
+      const chunkZ = Math.floor(player.position.z / 16)
+      const lastChunkX = Math.floor(player.lastPositionPlayersUpdated.x / 16)
+      const lastChunkZ = Math.floor(player.lastPositionPlayersUpdated.z / 16)
+      if (chunkX !== lastChunkX || chunkZ !== lastChunkZ) {
+        player._client.write('update_view_position', {
+          chunkX,
+          chunkZ
+        })
+      }
     })
   }
 
@@ -72,7 +136,8 @@ module.exports.player = function (player, serv, settings) {
     })
   }
 
-  player.setGameMode = gameMode => {
+  player.setGameMode = (gameMode) => {
+    if (gameMode !== player.gameMode) player.prevGameMode = player.gameMode
     player.gameMode = gameMode
     player._client.write('game_state_change', {
       reason: 3,
@@ -149,14 +214,15 @@ module.exports.player = function (player, serv, settings) {
       return
     }
 
-    addPlayer()
-    await player.findSpawnPoint()
+    await addPlayer()
     sendLogin()
     player.sendSpawnPosition()
     player.sendSelfPosition()
     player.sendAbilities()
     await player.sendMap()
     player.updateHealth(player.health)
+    player.setXp(player.xp)
+    updateInventory()
 
     updateTime()
     fillTabList()
@@ -168,5 +234,249 @@ module.exports.player = function (player, serv, settings) {
     await player.waitPlayerLogin()
     player.sendRestMap()
     sendChunkWhenMove()
+  }
+
+  const dimensionCodec = { // Dumped from a vanilla 1.16.1 server, as these are hardcoded constants
+    type: 'compound',
+    name: '',
+    value: {
+      dimension: {
+        type: 'list',
+        value: {
+          type: 'compound',
+          value: [
+            {
+              name: {
+                type: 'string',
+                value: 'minecraft:overworld'
+              },
+              bed_works: {
+                type: 'byte',
+                value: 1
+              },
+              shrunk: {
+                type: 'byte',
+                value: 0
+              },
+              piglin_safe: {
+                type: 'byte',
+                value: 0
+              },
+              has_ceiling: {
+                type: 'byte',
+                value: 0
+              },
+              has_skylight: {
+                type: 'byte',
+                value: 1
+              },
+              infiniburn: {
+                type: 'string',
+                value: 'minecraft:infiniburn_overworld'
+              },
+              ultrawarm: {
+                type: 'byte',
+                value: 0
+              },
+              ambient_light: {
+                type: 'float',
+                value: 0
+              },
+              logical_height: {
+                type: 'int',
+                value: 256
+              },
+              has_raids: {
+                type: 'byte',
+                value: 1
+              },
+              natural: {
+                type: 'byte',
+                value: 1
+              },
+              respawn_anchor_works: {
+                type: 'byte',
+                value: 0
+              }
+            }, /*, minecraft:overworld_caves is not implemented in flying-squid yet            {
+              "name": {
+                "type": "string",
+                "value": "minecraft:overworld_caves"
+              },
+              "bed_works": {
+                "type": "byte",
+                "value": 1
+              },
+              "shrunk": {
+                "type": "byte",
+                "value": 0
+              },
+              "piglin_safe": {
+                "type": "byte",
+                "value": 0
+              },
+              "has_ceiling": {
+                "type": "byte",
+                "value": 1
+              },
+              "has_skylight": {
+                "type": "byte",
+                "value": 1
+              },
+              "infiniburn": {
+                "type": "string",
+                "value": "minecraft:infiniburn_overworld"
+              },
+              "ultrawarm": {
+                "type": "byte",
+                "value": 0
+              },
+              "ambient_light": {
+                "type": "float",
+                "value": 0
+              },
+              "logical_height": {
+                "type": "int",
+                "value": 256
+              },
+              "has_raids": {
+                "type": "byte",
+                "value": 1
+              },
+              "natural": {
+                "type": "byte",
+                "value": 1
+              },
+              "respawn_anchor_works": {
+                "type": "byte",
+                "value": 0
+              }
+            } */
+            {
+              infiniburn: {
+                type: 'string',
+                value: 'minecraft:infiniburn_nether'
+              },
+              ultrawarm: {
+                type: 'byte',
+                value: 1
+              },
+              logical_height: {
+                type: 'int',
+                value: 128
+              },
+              natural: {
+                type: 'byte',
+                value: 0
+              },
+              name: {
+                type: 'string',
+                value: 'minecraft:the_nether'
+              },
+              bed_works: {
+                type: 'byte',
+                value: 0
+              },
+              fixed_time: {
+                type: 'long',
+                value: [
+                  0,
+                  18000
+                ]
+              },
+              shrunk: {
+                type: 'byte',
+                value: 1
+              },
+              piglin_safe: {
+                type: 'byte',
+                value: 1
+              },
+              has_skylight: {
+                type: 'byte',
+                value: 0
+              },
+              has_ceiling: {
+                type: 'byte',
+                value: 1
+              },
+              ambient_light: {
+                type: 'float',
+                value: 0.1
+              },
+              has_raids: {
+                type: 'byte',
+                value: 0
+              },
+              respawn_anchor_works: {
+                type: 'byte',
+                value: 1
+              }
+            }/*, minecraft:the_end is not implemented in flying-squid yet
+            {
+              "infiniburn": {
+                "type": "string",
+                "value": "minecraft:infiniburn_end"
+              },
+              "ultrawarm": {
+                "type": "byte",
+                "value": 0
+              },
+              "logical_height": {
+                "type": "int",
+                "value": 256
+              },
+              "natural": {
+                "type": "byte",
+                "value": 0
+              },
+              "name": {
+                "type": "string",
+                "value": "minecraft:the_end"
+              },
+              "bed_works": {
+                "type": "byte",
+                "value": 0
+              },
+              "fixed_time": {
+                "type": "long",
+                "value": [
+                  0,
+                  6000
+                ]
+              },
+              "shrunk": {
+                "type": "byte",
+                "value": 0
+              },
+              "piglin_safe": {
+                "type": "byte",
+                "value": 0
+              },
+              "has_skylight": {
+                "type": "byte",
+                "value": 0
+              },
+              "has_ceiling": {
+                "type": "byte",
+                "value": 0
+              },
+              "ambient_light": {
+                "type": "float",
+                "value": 0
+              },
+              "has_raids": {
+                "type": "byte",
+                "value": 1
+              },
+              "respawn_anchor_works": {
+                "type": "byte",
+                "value": 0
+              }
+            } */
+          ]
+        }
+      }
+    }
   }
 }

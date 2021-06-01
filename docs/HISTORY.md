@@ -1,3 +1,35 @@
+## 1.4.0
+* Server brand (@GroobleDierne)
+* minor fixes
+
+## 1.3.2
+* docker support (thanks @SonLight)
+
+## 1.3.1
+* Swap attribute names (thanks @mdashlw)
+* Use bedrock instead of polished andesite (thanks @GroobleDierne)
+* Fix crash in /gamemode command (thanks @lleyton)
+* Remove deprecated/heavy dependencies (request, request-promise) in favor of needle (thanks @WasabiThumb)
+* Remove blocks id (thanks @GroobleDierne)
+
+## 1.3.0
+
+* 1.9, 1.10, 1.11, 1.13, 1.14, 1.15, 1.16 support added (thanks @Deudly and @Karang for 1.13, thanks @IdanHo for >= 1.14)
+* implement server commands (thanks @redcarti)
+
+## 1.2.1
+
+* update to new pchunk + use bitmask
+
+## 1.2.0
+
+* fixes on useItem (thanks @bitknox)
+* fix egg spawning (thanks @rtm516)
+* tab complete functionality (thanks @jvyden420)
+* read/save player files (thanks @rrwr)
+* implement some redstones (thanks @Karang)
+* implement block actions (thanks @FalcoG)
+
 ## 1.1.2
 
 * copy README.md to root, so it's displayed by npm

@@ -1,16 +1,8 @@
 const Vec3 = require('vec3').Vec3
 const UserError = require('flying-squid').UserError
+const colors = require('colors')
 
 module.exports.player = function (player, serv) {
-  player.updateHealth = (health) => {
-    player.health = health
-    player._client.write('update_health', {
-      food: player.food,
-      foodSaturation: 0.0,
-      health: player.health
-    })
-  }
-
   function attackEntity (entityId) {
     const attackedEntity = serv.entities[entityId]
     if (!attackedEntity || (attackedEntity.gameMode !== 0 && attackedEntity.type === 'player')) return
@@ -23,27 +15,13 @@ module.exports.player = function (player, serv) {
 
   player._client.on('use_entity', ({ mouse, target } = {}) => {
     if (!serv.entities[target]) {
-      let dragon
-      for (dragon = target - 1; dragon >= target - 7 && !serv.entities[dragon]; dragon--) {}
+      let dragon = target - 1
+      while (dragon >= target - 7 && !serv.entities[dragon]) {
+        dragon--
+      }
       if (serv.entities[dragon] && serv.entities[dragon].entityType === 63) { target = dragon }
     }
     if (mouse === 1) { attackEntity(target) }
-  })
-
-  player.commands.add({
-    base: 'kill',
-    info: 'Kill entities',
-    usage: '/kill <selector>',
-    op: true,
-    parse (str) {
-      return str || false
-    },
-    action (sel) {
-      let arr = player.selectorString(sel)
-      if (arr.length === 0) throw new UserError('Could not find player')
-
-      arr.map(entity => entity.takeDamage({ damage: 20 }))
-    }
   })
 }
 
@@ -75,4 +53,33 @@ module.exports.entity = function (entity, serv) {
       entity.health = health
     }
   }
+}
+
+module.exports.server = function (serv) {
+  serv.commands.add({
+    base: 'kill',
+    info: 'Kill entities',
+    usage: '/kill <selector>|<player>',
+    parse (str) {
+      return str || false
+    },
+    action (sel, ctx) {
+      if (sel !== '') {
+        if (serv.getPlayer(sel) !== null) {
+          serv.getPlayer(sel).takeDamage({ damage: 20 })
+          serv.info(`Killed ${colors.bold(sel)}`)
+        } else {
+          const arr = serv.selectorString(sel)
+          if (arr.length === 0) throw new UserError('Could not find player')
+          arr.forEach(entity => {
+            entity.takeDamage({ damage: 20 })
+            serv.info(`Killed ${colors.bold(entity.type === 'player' ? entity.username : entity.name)}`)
+          })
+        }
+      } else {
+        if (ctx.player) ctx.player.takeDamage({ damage: 20 })
+        else serv.err('Can\'t kill console')
+      }
+    }
+  })
 }

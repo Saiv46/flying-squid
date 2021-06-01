@@ -1,18 +1,50 @@
-const Vec3 = require('vec3').Vec3
+module.exports.server = (serv, { version }) => {
+  const mcData = require('minecraft-data')(version)
+  const mobs = mcData.mobs
 
-module.exports.player = function (player, serv, { version }) {
-  const items = require('minecraft-data')(version).items
+  function getEntID (entName) {
+    let foundID = ''
 
-  player._client.on('block_place', ({ direction, location } = {}) => {
-    const heldItem = player.inventory.slots[36 + player.heldItemSlot]
-    if (heldItem === undefined) return
-    if (direction === -1 || heldItem.type === -1 || !items[heldItem.type]) return
-    const item = heldItem
-    const referencePosition = new Vec3(location.x, location.y, location.z)
-    const directionVector = directionToVector[direction]
-    const position = referencePosition.plus(directionVector)
+    Object.keys(mobs).forEach(mobID => {
+      const mob = mobs[mobID]
+      if ('minecraft:' + mob.name === entName) {
+        foundID = mobID
+      }
+    })
 
-    if (item.name === 'flint_and_steel') { player.use_flint_and_steel(referencePosition, directionVector, position) } else if (item.name === 'spawn_egg') { serv.spawnMob(item.metadata, player.world, position) }
+    return foundID
+  }
+
+  serv.on('asap', () => { // On server ready
+    if (serv.supportFeature('theFlattening')) { // >1.12 support
+      for (const mob of Object.values(mobs)) {
+        const spawnEgg = mcData.itemsByName[mob.name + '_spawn_egg']
+        if (spawnEgg) {
+          serv.onItemPlace(spawnEgg.name, ({ player, placedPosition }) => {
+            serv.spawnMob(mob.id, player.world, placedPosition)
+            return { id: -1, data: 0 }
+          })
+        }
+      }
+    } else {
+      if (serv.supportFeature('entityMCPrefixed')) { // 1.12 support
+        serv.onItemPlace('spawn_egg', ({ item, player, placedPosition }) => {
+          serv.spawnMob(getEntID(item.nbt.value.EntityTag.value.id.value), player.world, placedPosition)
+          return { id: -1, data: 0 }
+        })
+      } else {
+        if (serv.supportFeature('nbtOnMetadata')) { // 1.8 support
+          serv.onItemPlace('spawn_egg', ({ item, player, placedPosition }) => {
+            serv.spawnMob(item.metadata, player.world, placedPosition)
+            return { id: -1, data: 0 }
+          })
+        } else {
+          serv.onItemPlace('spawn_egg', ({ item, player, placedPosition }) => { // 1.9, 1.10, 1.11 support
+            serv.spawnMob(getEntID('minecraft:' + item.nbt.value.EntityTag.value.id.value), player.world, placedPosition)
+            return { id: -1, data: 0 }
+          })
+        }
+      }
+    }
   })
 }
-const directionToVector = [new Vec3(0, -1, 0), new Vec3(0, 1, 0), new Vec3(0, 0, -1), new Vec3(0, 0, 1), new Vec3(-1, 0, 0), new Vec3(1, 0, 0)]

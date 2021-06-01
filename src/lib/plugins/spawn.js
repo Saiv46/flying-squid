@@ -28,10 +28,11 @@ module.exports.server = function (serv, options) {
     return entity
   }
 
-  serv.spawnObject = (type, world, position, { pitch = 0, yaw = 0, velocity = new Vec3(0, 0, 0), data = 1, itemId, itemDamage = 0, pickupTime = undefined, deathTime = undefined }) => {
+  serv.spawnObject = (type, world, position, { pitch = 0, yaw = 0, velocity = new Vec3(0, 0, 0), data = 1, itemId, itemDamage = 0, itemCount = 1, pickupTime = undefined, deathTime = undefined }) => {
     const object = serv.initEntity('object', type, world, position)
     object.uuid = UUID.v4()
-    object.name = objectsById[type].name
+    // TODO: don't use objectsById, it doesn't exist
+    object.name = objectsById[type] === undefined ? 'unknown' : objectsById[type].name
     object.data = data
     object.velocity = velocity
     object.pitch = pitch
@@ -44,6 +45,7 @@ module.exports.server = function (serv, options) {
     object.pickupTime = pickupTime
     object.itemId = itemId
     object.itemDamage = itemDamage
+    object.itemCount = itemCount
 
     object.updateAndSpawn()
   }
@@ -73,71 +75,70 @@ module.exports.server = function (serv, options) {
     })
     delete serv.entities[entity.id]
   }
-}
 
-module.exports.player = function (player, serv, options) {
-  const version = options.version
   const entitiesByName = require('minecraft-data')(version).entitiesByName
-  const Item = require('prismarine-item')(version)
 
-  player.commands.add({
+  serv.commands.add({
     base: 'summon',
     info: 'Summon an entity',
     usage: '/summon <entity_name>',
+    onlyPlayer: true,
     op: true,
-    action (name) {
+    action (name, ctx) {
       if (Object.keys(serv.entities).length > options['max-entities']) { throw new UserError('Too many mobs !') }
       const entity = entitiesByName[name]
       if (!entity) {
         return 'No entity named ' + name
       }
       if (entity.type === 'mob') {
-        serv.spawnMob(entity.id, player.world, player.position, {
-          velocity: Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
+        serv.spawnMob(entity.id, ctx.player.world, ctx.player.position, {
+          velocity: new Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
         })
       } else if (entity.type === 'object') {
-        serv.spawnObject(entity.id, player.world, player.position, {
-          velocity: Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
+        serv.spawnObject(entity.id, ctx.player.world, ctx.player.position, {
+          velocity: new Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
         })
       }
     }
   })
 
-  player.commands.add({
+  serv.commands.add({
     base: 'summonMany',
     info: 'Summon many entities',
     usage: '/summonMany <number> <entity_name>',
+    onlyPlayer: true,
     op: true,
     parse (str) {
       const args = str.split(' ')
       if (args.length !== 2) { return false }
       return { number: args[0], name: args[1] }
     },
-    action ({ number, name }) {
+    action ({ number, name }, ctx) {
       if (Object.keys(serv.entities).length > options['max-entities'] - number) { throw new UserError('Too many mobs !') }
       const entity = entitiesByName[name]
       if (!entity) {
         return 'No entity named ' + name
       }
-      let s = Math.floor(Math.sqrt(number))
+      const s = Math.floor(Math.sqrt(number))
       for (let i = 0; i < number; i++) {
         if (entity.type === 'mob') {
-          serv.spawnMob(entity.id, player.world, player.position.offset(Math.floor(i / s * 10), 0, i % s * 10), {
-            velocity: Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
+          serv.spawnMob(entity.id, ctx.player.world, ctx.player.position.offset(Math.floor(i / s * 10), 0, i % s * 10), {
+            velocity: new Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
           })
         } else if (entity.type === 'object') {
-          serv.spawnObject(entity.id, player.world, player.position.offset(Math.floor(i / s * 10), 0, i % s * 10), {
-            velocity: Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
+          serv.spawnObject(entity.id, ctx.player.world, ctx.player.position.offset(Math.floor(i / s * 10), 0, i % s * 10), {
+            velocity: new Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
           })
         }
       }
     }
   })
 
-  player.commands.add({
+  serv.commands.add({
     base: 'pile',
     info: 'make a pile of entities',
     usage: '/pile <entities types>',
+    onlyPlayer: true,
     op: true,
     parse (str) {
       const args = str.split(' ')
@@ -146,17 +147,19 @@ module.exports.player = function (player, serv, options) {
         .map(name => entitiesByName[name])
         .filter(entity => !!entity)
     },
-    action (entityTypes) {
+    action (entityTypes, ctx) {
       if (Object.keys(serv.entities).length > options['max-entities'] - entityTypes.length) { throw new UserError('Too many mobs !') }
       entityTypes.map(entity => {
         if (entity.type === 'mob') {
-          return serv.spawnMob(entity.id, player.world, player.position, {
-            velocity: Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
+          return serv.spawnMob(entity.id, ctx.player.world, ctx.player.position, {
+            velocity: new Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
           })
         } else if (entity.type === 'object') {
-          return serv.spawnObject(entity.id, player.world, player.position, {
-            velocity: Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
+          return serv.spawnObject(entity.id, ctx.player.world, ctx.player.position, {
+            velocity: new Vec3((Math.random() - 0.5) * 10, Math.random() * 10 + 10, (Math.random() - 0.5) * 10)
           })
+        } else {
+          return Promise.resolve()
         }
       })
         .reduce((prec, entity) => {
@@ -166,18 +169,18 @@ module.exports.player = function (player, serv, options) {
     }
   })
 
-  player.commands.add({
+  serv.commands.add({
     base: 'attach',
     info: 'attach an entity on an other entity',
     usage: '/attach <carrier> <attached>',
     op: true,
-    parse (str) {
+    parse (str, ctx) {
       const args = str.split(' ')
       if (args.length !== 2) { return false }
 
-      let carrier = player.selectorString(args[0])
+      const carrier = ctx.player ? ctx.player.selectorString(args[0]) : serv.selectorString(args[0])
       if (carrier.length === 0) throw new UserError('one carrier')
-      let attached = player.selectorString(args[1])
+      const attached = ctx.player ? ctx.player.selectorString(args[1]) : serv.selectorString(args[1])
       if (attached.length === 0) throw new UserError('one attached')
 
       return { carrier: carrier[0], attached: attached[0] }
@@ -186,30 +189,68 @@ module.exports.player = function (player, serv, options) {
       carrier.attach(attached)
     }
   })
+}
+
+module.exports.player = function (player, serv, options) {
+  const version = options.version
+  const Item = require('prismarine-item')(version)
 
   player.spawnEntity = entity => {
     player._client.write(entity.spawnPacketName, entity.getSpawnPacket())
-    if (typeof entity.itemId !== 'undefined') {
-      entity.sendMetadata([{
-        'key': 10,
-        'type': 5,
-        'value': {
-          blockId: entity.itemId,
-          itemDamage: entity.itemDamage,
-          itemCount: 1
-        }
-      }])
+    if (serv.supportFeature('entityMetadataSentSeparately')) {
+      entity.sendMetadata(entity.metadata)
     }
-    entity.equipment.forEach((equipment, slot) => {
-      if (equipment !== undefined) {
-        player._client.write('entity_equipment', {
-          entityId: entity.id,
-          slot: slot,
-          item: Item.toNotch(equipment)
-        })
+    if (typeof entity.itemId !== 'undefined') {
+      if (serv.supportFeature('theFlattening')) {
+        entity.sendMetadata([{
+          key: 6,
+          type: 6,
+          value: {
+            present: true,
+            itemId: entity.itemId,
+            itemCount: entity.itemCount
+          }
+        }])
+      } else {
+        entity.sendMetadata([{
+          key: 10,
+          type: 5,
+          value: {
+            blockId: entity.itemId,
+            itemDamage: entity.itemDamage,
+            itemCount: entity.itemCount
+          }
+        }])
       }
     }
-    )
+    if (serv.supportFeature('allEntityEquipmentInOne')) {
+      const equipments = []
+      entity.equipment.forEach((equipment, slot) => {
+        if (equipment !== undefined) {
+          equipments.push({
+            slot: slot,
+            item: Item.toNotch(equipment)
+          })
+        }
+      })
+      if (equipments.length > 0) {
+        player._client.write('entity_equipment', {
+          entityId: entity.id,
+          equipments: equipments
+        })
+      }
+    } else {
+      entity.equipment.forEach((equipment, slot) => {
+        if (equipment !== undefined) {
+          player._client.write('entity_equipment', {
+            entityId: entity.id,
+            slot: slot,
+            item: Item.toNotch(equipment)
+          })
+        }
+      }
+      )
+    }
   }
 }
 
@@ -337,7 +378,7 @@ module.exports.entity = function (entity, serv) {
     if (serv.supportFeature('setPassengerStackEntity')) {
       const p = {
         entityId: entity.id,
-        passengers: [ attachedEntity.id ]
+        passengers: [attachedEntity.id]
       }
       if (entity.type === 'player') { entity._client.write('set_passengers', p) }
       entity._writeOthersNearby('set_passengers', p)

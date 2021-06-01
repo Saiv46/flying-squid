@@ -30,6 +30,7 @@
       - [serv.tickCount](#servtickcount)
       - [serv.doDaylightCycle](#servdodaylightcycle)
       - [serv.plugins](#servplugins)
+      - [serv.tabComplete](#servtabcomplete)
     - [Events](#events)
       - ["error" (error)](#error-error)
       - ["clientError" (client,error)](#clienterror-clienterror)
@@ -43,6 +44,12 @@
       - [serv.broadcast(message[,color])](#servbroadcastmessagecolor)
       - [serv.getPlayer(username)](#servgetplayerusername)
       - [serv.getNearby(loc)](#servgetnearbyloc)
+      - [serv.onItemPlace(name, handler)](#servonitemplacename-handler)
+      - [serv.onBlockInteraction(name, handler)](#servonblockinteractionname-handler)
+      - [serv.onBlockUpdate(name, handler)](#servonblockupdatename-handler)
+      - [serv.updateBlock(world, pos, fromTick, tick, forceNotify = false, data = null)](#servupdateblockworld-pos-fromtick-tick-forcenotify--false-data--null)
+      - [serv.notifyNeighborsOfStateChange(world, pos, fromTick, tick, forceNotify = false, data = null)](#servnotifyneighborsofstatechangeworld-pos-fromtick-tick-forcenotify--false-data--null)
+      - [serv.notifyNeighborsOfStateChangeDirectional(world, pos, dir, fromTick, tick, forceNotify = false, data = null)](#servnotifyneighborsofstatechangedirectionalworld-pos-dir-fromtick-tick-forcenotify--false-data--null)
       - [server.banUsername(username,reason,callback)](#serverbanusernameusernamereasoncallback)
       - [server.ban(uuid,reason)](#serverbanuuidreason)
       - [server.pardonUsername(username,callback)](#serverpardonusernameusernamecallback)
@@ -51,6 +58,7 @@
       - [server.setTime(time)](#serversettimetime)
       - [server.setTickInterval(ticksPerSecond)](#serversettickintervaltickspersecond)
       - [server.setBlock(world, position, blockType, blockData)](#serversetblockworld-position-blocktype-blockdata)
+      - [server.setBlockAction(world, position, actionId, actionParam)](#serversetblockactionworld-position-actionid-actionparam)
       - [server.playSound(sound, world, position, opt)](#serverplaysoundsound-world-position-opt)
       - [server.playNoteBlock(world, position, pitch)](#serverplaynoteblockworld-position-pitch)
       - [server.getNote(note)](#servergetnotenote)
@@ -106,7 +114,6 @@
       - [player.xp](#playerxp)
       - [player.displayXp](#playerdisplayxp)
       - [player.xpLevel](#playerxplevel)
-      - [player.commands](#playercommands)
     - [Events](#events-2)
       - ["connected"](#connected)
       - ["spawned"](#spawned)
@@ -121,6 +128,7 @@
       - ["command"](#command)
       - ["punch"](#punch)
       - ["sendBlock"](#sendblock)
+      - ["sendBlockAction"](#sendblockaction)
       - ["sendChunk"](#sendchunk)
       - ["dig"](#dig)
       - ["dug"](#dug)
@@ -138,11 +146,15 @@
       - [player.chat(message)](#playerchatmessage)
       - [player.changeBlock(position,blockType,blockData)](#playerchangeblockpositionblocktypeblockdata)
       - [player.sendBlock(position,blockType,blockData)](#playersendblockpositionblocktypeblockdata)
+      - [player.sendBlockAction(position,actionId,actionParam,blockType)](#playersendblockactionpositionactionidactionparamblocktype)
       - [player.sendInitialPosition()](#playersendinitialposition)
       - [player.setGameMode(gameMode)](#playersetgamemodegamemode)
       - [player.handleCommand(command)](#playerhandlecommandcommand)
       - [player.setBlock(position,blockType,blockData)](#playersetblockpositionblocktypeblockdata)
+      - [player.setBlockAction(position,actionId,actionParam)](#playersetblockactionpositionactionidactionparam)
       - [player.updateHealth(health)](#playerupdatehealthhealth)
+      - [player.updateFood(health)](#playerupdatefoodfood)
+      - [player.updateFoodSaturation(health)](#playerupdatefoodsaturationfoodsaturation)
       - [player.changeWorld(world, opt)](#playerchangeworldworld-opt)
       - [player.spawnAPlayer(spawnedPlayer)](#playerspawnaplayerspawnedplayer)
       - [player.updateAndSpawnNearbyPlayers()](#playerupdateandspawnnearbyplayers)
@@ -293,6 +305,41 @@ Default `true`. If false, time will not automatically pass.
 
 List of all plugins. Use serv.plugins[pluginName] to get a plugin's object and data.
 
+#### serv.commands
+
+Instance of the [Command](#flying-squidcommand) class.
+``serv.commands`` contains all commands of the server.
+Here is an example to create a new command :
+```js
+serv.commands.add({
+    base: 'hello',
+    info: 'print hello in the console',
+    usage: 'hello <pseudo>',
+    parse(str)  {
+      const args=str.split(' ');
+      if(args.length!=1)
+        return false;
+       
+      return {pseudo:args[0]};
+    },
+    action({pseudo}, ctx) {
+      if (ctx.player) player.chat("Hello "+pseudo);
+      else serv.log("Hello "+pseudo);
+    }
+});
+```
+
+#### serv.tabComplete
+
+`serv.tabComplete` has types and tab completition function
+
+You can provide your types:
+```js
+serv.tabComplete.add('tabId', () => {
+  return ['some', 'values', 'in array', 'ONLY STRINGS!']
+})
+```
+
 ### Events
 
 #### "error" (error)
@@ -345,6 +392,36 @@ Returns array of players within loc. loc is a required paramater. The object con
 * position: Center position
 * radius: Distance from position
 
+#### serv.onItemPlace(name, handler)
+
+Register a handler that will be called when an item of type `name` is called to place a block.
+
+The argument given to the handler is an object containing the held item that triggered the event, the direction (face) on which the player clicked, the angle of the player around the placed block. It should return an object containing the id and data of the block to place.
+
+#### serv.onBlockInteraction(name, handler)
+
+Register a handler that will be called when a player interact with a block of type `name`.
+
+The argument given to the handler is an object containing the clicked block and the player. It should return true if the block interaction occurred and the block placement should be cancelled.
+
+#### serv.onBlockUpdate(name, handler)
+
+Register a handler that will be called when a block of the type `name` is updated. It should verify that the block state is still correct according to the game's rules. It is triggered when a neighboring block has been modified.
+
+The arguments of the handler are the world in which the update occurred, the block, fromTick the tick at which the update was triggered, the tick the update was scheduled to (current tick), and optional data (null most of the time) that can be used to transmit data between block updates. The handler should return true if the block was changed so the update manager can send a multiBlockChange packet for all the changes that occurred within the tick. The state of the block should be modified by using the world's setBlockXXX functions instead of serv.setBlock (that would send redundant updates to players).
+
+#### serv.updateBlock(world, pos, fromTick, tick, forceNotify = false, data = null)
+
+Trigger a block update for the block in `world` at `pos`. `fromTick` is the current server tick `serv.tickCount`, `tick` is the future server tick when the update should be executed. When `forceNotify` is true, the block update will always trigger an update on the 6 direct neighbors, even when no handler is registered for this block type. `data` is an optional object that will be given to the handler.
+
+#### serv.notifyNeighborsOfStateChange(world, pos, fromTick, tick, forceNotify = false, data = null)
+
+Similar to `serv.updateBlock` but will trigger an update on the 6 direct neighbors of `pos` but not on the block itself.
+
+#### serv.notifyNeighborsOfStateChangeDirectional(world, pos, dir, fromTick, tick, forceNotify = false, data = null)
+
+Similar to `serv.updateBlock` but will trigger an update on 5 of the direct neighbors of `pos.plus(dir)`, but not on the block at `pos` or `pos.plus(dir)`.
+
 #### server.banUsername(username,reason,callback)
 
 Bans players given a username. Mainly used if player is not online, otherwise use `player.ban()`.
@@ -380,6 +457,10 @@ Use `server.stopTickInterval()` if you want but this method already calls that a
 #### server.setBlock(world, position, blockType, blockData)
 
 Saves block in world and sends block update to all players of the same world.
+
+#### server.setBlockAction(world, position, actionId, actionParam)
+
+Sends a block action to all players of the same world.
 
 #### server.playSound(sound, world, position, opt)
 
@@ -682,29 +763,6 @@ Number from 0 to 1.0 representing the progress bar at the bottom of the player's
 
 Level of xp the player has. Set this with player.setXpLevel()
 
-#### player.commands
-
-Instance of the [Command](#flying-squidcommand) class.
-Here is an example to create a new command :
-```js
-player.commands.add({
-    base: 'hello',
-    info: 'print hello in the console',
-    usage: '/hello <pseudo>',
-    op: false,
-    parse(str)  {
-      const args=str.split(' ');
-      if(args.length!=1)
-        return false;
-       
-      return {pseudo:args[0]};
-    },
-    action({pseudo}) {
-      console.log("Hello "+pseudo);
-    }
-});
-```
-
 ### Events
 
 #### "connected" 
@@ -791,6 +849,20 @@ Emitted when sending a block to a player (block changed). This is separate for e
 - data: Metadata of the block
 
 Default: Send block change to player.
+
+Cancelled: Nothing
+
+#### "sendBlockAction"
+
+Emitted when sending a block action to a player. This is separate for every player, cancelling this for one player will prevent the action from happening.
+- position: Position of the block
+- id: ID of the block
+- actionId: Action ID, dependent on the block.
+- actionParam: The parameters depend on the block.
+
+All block action IDs and parameters are listed [here](https://wiki.vg/Block_Actions).
+
+Default: Send block action to player.
 
 Cancelled: Nothing
 
@@ -936,6 +1008,19 @@ change the block at position `position` to `blockType` and `blockData`
 
 this will not make any changes on the server's world and only sends it to the user as a "fake" or "local" block
 
+#### player.sendBlockAction(position,actionId,actionParam,blockType)
+
+Set the block action at position `position` to `actionId` and `actionParam`.
+
+``blockType`` is only required when the block at the location is a fake block. 
+This will only be caused by using ``player.sendBlock``.
+
+This will not make any changes to the server's world and only sends it to the user as a local action.
+
+#### player.sendBrand(brand = 'flying-squid')
+
+Send the specified `brand` to the player or `flying-squid` by default
+
 #### player.sendInitialPosition()
 
 send its initial position to the player
@@ -952,9 +1037,23 @@ handle `command`
 
 Saves block in world and sends block update to all players of the same world.
 
+#### player.setBlockAction(position,actionId,actionParam)
+
+Sets a block action and sends the block action to all players in the same world.
+
+This will not make any changes to the server's world
+
 #### player.updateHealth(health)
 
-update the player health.
+Updates the player's health and sends the relevant packet.
+
+#### player.updateFood(food)
+
+Updates the player's food and sends the relevant packet.
+
+#### player.updateFoodSaturation(foodSaturation)
+
+Updates the player's food saturation and sends the relevant packet.
 
 #### player.changeWorld(world, opt)
 

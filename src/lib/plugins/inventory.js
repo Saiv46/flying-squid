@@ -2,21 +2,31 @@ const Vec3 = require('vec3')
 
 module.exports.player = function (player, serv, { version }) {
   const Item = require('prismarine-item')(version)
-  const windows = require('prismarine-windows')(version).windows
+  const windows = require('prismarine-windows')(version)
 
   player.heldItemSlot = 0
   player.heldItem = new Item(256, 1)
-  player.inventory = new windows.InventoryWindow(0, 'Inventory', 44)
+  player.inventory = windows.createWindow(1, 'minecraft:inventory', 'inv', 36)
 
   player._client.on('held_item_slot', ({ slotId } = {}) => {
     player.heldItemSlot = slotId
     player.setEquipment(0, player.inventory.slots[36 + player.heldItemSlot])
 
-    player._writeOthersNearby('entity_equipment', {
-      entityId: player.id,
-      slot: 0,
-      item: Item.toNotch(player.heldItem)
-    })
+    if (serv.supportFeature('allEntityEquipmentInOne')) {
+      player._writeOthersNearby('entity_equipment', {
+        entityId: player.id,
+        equipments: [{
+          slot: 0,
+          item: Item.toNotch(player.heldItem)
+        }]
+      })
+    } else {
+      player._writeOthersNearby('entity_equipment', {
+        entityId: player.id,
+        slot: 0,
+        item: Item.toNotch(player.heldItem)
+      })
+    }
   })
 
   player._client.on('window_click', function (clickInfo) {
@@ -153,7 +163,7 @@ module.exports.player = function (player, serv, { version }) {
     player.inventory.updateSlot(slot, newItem)
   })
 
-  player.inventory.on('windowUpdate', function (slot, oldItem, newItem) {
+  player.inventory.on('updateSlot', function (slot, oldItem, newItem) {
     const equipments = {
       5: 4,
       6: 3,
@@ -163,11 +173,21 @@ module.exports.player = function (player, serv, { version }) {
     equipments[player.heldItemSlot] = 0
     if (equipments[slot] !== undefined) {
       player.setEquipment(equipments[slot], newItem)
-      player._writeOthersNearby('entity_equipment', {
-        entityId: player.id,
-        slot: equipments[slot],
-        item: Item.toNotch(newItem)
-      })
+      if (serv.supportFeature('allEntityEquipmentInOne')) {
+        player._writeOthersNearby('entity_equipment', {
+          entityId: player.id,
+          equipments: [{
+            slot: equipments[slot],
+            item: Item.toNotch(newItem)
+          }]
+        })
+      } else {
+        player._writeOthersNearby('entity_equipment', {
+          entityId: player.id,
+          slot: equipments[slot],
+          item: Item.toNotch(newItem)
+        })
+      }
     }
 
     player._client.write('set_slot', {
@@ -179,12 +199,11 @@ module.exports.player = function (player, serv, { version }) {
 
   player.collect = (collectEntity) => {
     // Add it to a stack already in the player's inventory if possible
-    for (let itemKey = 0; itemKey < player.inventory.slots.length; itemKey++) {
-      const item = player.inventory.slots[itemKey]
-      if (item === undefined) continue
-      if (item.type === collectEntity.itemId) {
+    for (let slot = 0; slot < player.inventory.slots.length; slot++) {
+      const item = player.inventory.slots[slot]
+      if (item && item.type === collectEntity.itemId) {
         item.count += 1
-        player.inventory.updateSlot(itemKey, item)
+        player.inventory.updateSlot(slot, item)
         collectEntity._writeOthersNearby('collect', {
           collectedEntityId: collectEntity.id,
           collectorEntityId: player.id
@@ -197,7 +216,7 @@ module.exports.player = function (player, serv, { version }) {
 
     // If we couldn't add it to a already existing stack, put it in a new stack if the inventory has room
     const emptySlot = player.inventory.firstEmptyInventorySlot()
-    if (emptySlot !== null) {
+    if (emptySlot) {
       collectEntity._writeOthersNearby('collect', {
         collectedEntityId: collectEntity.id,
         collectorEntityId: player.id

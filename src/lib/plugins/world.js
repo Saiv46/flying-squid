@@ -1,4 +1,5 @@
 const spiralloop = require('spiralloop')
+const Vec3 = require('vec3').Vec3
 
 const generations = require('flying-squid').generations
 const { promisify } = require('util')
@@ -8,8 +9,10 @@ const { level } = require('prismarine-provider-anvil')
 const fsStat = promisify(fs.stat)
 const fsMkdir = promisify(fs.mkdir)
 
-module.exports.server = async function (serv, { version, worldFolder, generation = { 'name': 'diamond_square', 'options': { 'worldHeight': 80 } } } = {}) {
+module.exports.server = async function (serv, { version, worldFolder, generation = { name: 'diamond_square', options: { worldHeight: 80 } } } = {}) {
   const World = require('prismarine-world')(version)
+  const mcData = require('minecraft-data')(version)
+  const Anvil = require('prismarine-provider-anvil').Anvil(version)
 
   const newSeed = generation.options.seed || Math.floor(Math.random() * Math.pow(2, 31))
   let seed
@@ -19,24 +22,30 @@ module.exports.server = async function (serv, { version, worldFolder, generation
     try {
       await fsStat(regionFolder)
     } catch (err) {
-      await fsMkdir(regionFolder)
+      await fsMkdir(regionFolder, { recursive: true })
     }
 
     try {
       const levelData = await level.readLevel(worldFolder + '/level.dat')
-      seed = levelData['RandomSeed'][0]
+      seed = levelData.RandomSeed[0]
     } catch (err) {
       seed = newSeed
-      await level.writeLevel(worldFolder + '/level.dat', { 'RandomSeed': [seed, 0] })
+      await level.writeLevel(worldFolder + '/level.dat', { RandomSeed: [seed, 0] })
     }
   } else { seed = newSeed }
   generation.options.seed = seed
   generation.options.version = version
   serv.emit('seed', generation.options.seed)
   const generationModule = generations[generation.name] ? generations[generation.name] : require(generation.name)
-  serv.overworld = new World(generationModule(generation.options), regionFolder)
-  serv.netherworld = new World(generations['nether'](generation.options))
+  serv.overworld = new World(generationModule(generation.options), regionFolder === undefined ? null : new Anvil(regionFolder))
+  serv.netherworld = new World(generations.nether(generation.options))
   // serv.endworld = new World(generations["end"]({}));
+
+  serv.dimensionNames = {
+    '-1': 'minecraft:nether',
+    0: 'minecraft:overworld'
+    // 1: 'minecraft:end'
+  }
 
   // WILL BE REMOVED WHEN ACTUALLY IMPLEMENTED
   serv.overworld.blockEntityData = {}
@@ -55,13 +64,32 @@ module.exports.server = async function (serv, { version, worldFolder, generation
     return Promise.all(promises)
   }
 
-  serv.setBlock = async (world, position, blockType, blockData) => {
+  serv.setBlock = async (world, position, stateId) => {
     serv.players
       .filter(p => p.world === world)
-      .forEach(player => player.sendBlock(position, blockType, blockData))
+      .forEach(player => player.sendBlock(position, stateId))
+    await world.setBlockStateId(position, stateId)
+    if (stateId === 0) serv.notifyNeighborsOfStateChange(world, position, serv.tickCount, serv.tickCount, true)
+    else serv.updateBlock(world, position, serv.tickCount, serv.tickCount, true)
+  }
 
-    await world.setBlockType(position, blockType)
-    await world.setBlockData(position, blockData)
+  if (serv.supportFeature('theFlattening')) {
+    serv.setBlockType = async (world, position, id) => {
+      serv.setBlock(world, position, mcData.blocks[id].minStateId)
+    }
+  } else {
+    serv.setBlockType = async (world, position, id) => {
+      serv.setBlock(world, position, id << 4)
+    }
+  }
+
+  serv.setBlockAction = async (world, position, actionId, actionParam) => {
+    const location = new Vec3(position.x, position.y, position.z)
+    const blockType = await world.getBlockType(location)
+
+    serv.players
+      .filter(p => p.world === world)
+      .forEach(player => player.sendBlockAction(position, actionId, actionParam, blockType))
   }
 
   serv.reloadChunks = (world, chunks) => {
@@ -77,6 +105,17 @@ module.exports.server = async function (serv, { version, worldFolder, generation
 
   // serv.pregenWorld(serv.overworld).then(() => serv.log('Pre-Generated Overworld'));
   // serv.pregenWorld(serv.netherworld).then(() => serv.log('Pre-Generated Nether'));
+  serv.commands.add({
+    base: 'changeworld',
+    info: 'to change world',
+    usage: '/changeworld overworld|nether',
+    onlyPlayer: true,
+    op: true,
+    action (world, ctx) {
+      if (world === 'nether') ctx.player.changeWorld(serv.netherworld, { dimension: -1 })
+      if (world === 'overworld') ctx.player.changeWorld(serv.overworld, { dimension: 0 })
+    }
+  })
 }
 
 module.exports.player = function (player, serv, settings) {
@@ -109,10 +148,31 @@ module.exports.player = function (player, serv, settings) {
         x: x,
         z: z,
         groundUp: true,
-        bitMap: 0xffff,
+        bitMap: chunk.getMask(),
+        biomes: chunk.dumpBiomes(),
+        ignoreOldData: true, // should be false when a chunk section is updated instead of the whole chunk being overwritten, do we ever do that?
+        heightmaps: {
+          type: 'compound',
+          name: '',
+          value: {
+            MOTION_BLOCKING: { type: 'longArray', value: new Array(36).fill([0, 0]) }
+          }
+        }, // FIXME: fake heightmap
         chunkData: chunk.dump(),
         blockEntities: []
       })
+      if (serv.supportFeature('lightSentSeparately')) {
+        player._client.write('update_light', {
+          chunkX: x,
+          chunkZ: z,
+          trustEdges: true, // should be false when a chunk section is updated instead of the whole chunk being overwritten, do we ever do that?
+          skyLightMask: chunk.skyLightMask,
+          blockLightMask: chunk.blockLightMask,
+          emptySkyLightMask: 0,
+          emptyBlockLightMask: 0,
+          data: chunk.dumpLight()
+        })
+      }
       return Promise.resolve()
     })
   }
@@ -173,7 +233,7 @@ module.exports.player = function (player, serv, settings) {
 
   player.sendSpawnPosition = () => {
     player._client.write('spawn_position', {
-      'location': player.spawnPoint
+      location: player.spawnPoint
     })
   }
 
@@ -182,12 +242,21 @@ module.exports.player = function (player, serv, settings) {
     opt = opt || {}
     player.world = world
     player.loadedChunks = {}
-    if (typeof opt.gamemode !== 'undefined') player.gameMode = opt.gamemode
+    if (typeof opt.gamemode !== 'undefined') {
+      if (opt.gamemode !== player.gameMode) player.prevGameMode = player.gameMode
+      player.gameMode = opt.gamemode
+    }
     player._client.write('respawn', {
-      dimension: opt.dimension || 0,
+      previousGameMode: player.prevGameMode,
+      dimension: serv.supportFeature('dimensionIsAString') ? serv.dimensionNames[opt.dimension || 0] : opt.dimension || 0,
+      worldName: serv.dimensionNames[opt.dimension || 0],
       difficulty: opt.difficulty || serv.difficulty,
+      hashedSeed: serv.hashedSeed,
       gamemode: opt.gamemode || player.gameMode,
-      levelType: 'default'
+      levelType: 'default',
+      isDebug: false,
+      isFlat: false,
+      copyMetadata: true
     })
     await player.findSpawnPoint()
     player.position = player.spawnPoint
@@ -202,15 +271,4 @@ module.exports.player = function (player, serv, settings) {
     await player.waitPlayerLogin()
     player.sendRestMap()
   }
-
-  player.commands.add({
-    base: 'changeworld',
-    info: 'to change world',
-    usage: '/changeworld overworld|nether',
-    op: true,
-    action (world) {
-      if (world === 'nether') player.changeWorld(serv.netherworld, { dimension: -1 })
-      if (world === 'overworld') player.changeWorld(serv.overworld, { dimension: 0 })
-    }
-  })
 }

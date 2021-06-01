@@ -1,12 +1,12 @@
 /* eslint-env jest */
 
 const squid = require('flying-squid')
-const settings = require('../config/default-settings')
+const settings = require('../config/default-settings.json')
 const mineflayer = require('mineflayer')
 const { Vec3 } = require('vec3')
 
-function assertPosEqual (actual, expected) {
-  expect(actual.distanceTo(expected)).toBeLessThan(1)
+function assertPosEqual (actual, expected, precision = 1) {
+  expect(actual.distanceTo(expected)).toBeLessThan(precision)
 }
 
 const once = require('event-promise')
@@ -47,40 +47,15 @@ squid.supportedVersions.forEach((supportedVersion, i) => {
       expect(msg1.extra[0].text).toEqual(message)
     }
 
-    async function waitMessages (bot, messages) {
-      const toReceive = messages.reduce((acc, message) => {
-        acc[message] = 1
-        return acc
-      }, {})
-      const received = {}
-      return new Promise(resolve => {
-        const listener = msg => {
-          const message = msg.extra[0].text
-          if (!toReceive[message]) throw new Error('Received ' + message + ' , expected to receive one of ' + messages)
-          if (received[message]) throw new Error('Received ' + message + ' two times')
-          received[message] = 1
-          if (Object.keys(received).length === messages.length) {
-            bot.removeListener('message', listener)
-            resolve()
-          }
-        }
-        bot.on('message', listener)
-      })
-    }
-
-    async function waitLoginMessage (bot) {
-      return Promise.all([waitMessages(bot, ['bot joined the game.', 'bot2 joined the game.'])])
-    }
-
     beforeEach(async () => {
       const options = settings
       options['online-mode'] = false
-      options['port'] = 0
+      options.port = 0
       options['view-distance'] = 2
-      options['worldFolder'] = undefined
-      options['logging'] = false
-      options['version'] = version.minecraftVersion
-      options['generation'] = { // TODO: fix block tests failing at random without manually specifying seed
+      options.worldFolder = undefined
+      options.logging = false
+      options.version = version.minecraftVersion
+      options.generation = { // TODO: fix block tests failing at random without manually specifying seed
         name: 'diamond_square',
         options: {
           seed: 2116746182
@@ -138,9 +113,10 @@ squid.supportedVersions.forEach((supportedVersion, i) => {
         await Promise.all([waitSpawnZone(bot, 2), waitSpawnZone(bot2, 2), onGround(bot), onGround(bot2)])
 
         const pos = bot.entity.position.offset(0, -1, 0).floored()
+        const p = once(bot2, 'blockUpdate', { array: true })
         bot.dig(bot.blockAt(pos))
 
-        let [, newBlock] = await once(bot2, 'blockUpdate', { array: true })
+        const [, newBlock] = await p
         assertPosEqual(newBlock.position, pos)
         expect(newBlock.type).toEqual(0)
       })
@@ -149,31 +125,75 @@ squid.supportedVersions.forEach((supportedVersion, i) => {
         await Promise.all([waitSpawnZone(bot, 2), waitSpawnZone(bot2, 2), onGround(bot), onGround(bot2)])
 
         const pos = bot.entity.position.offset(0, -2, 0).floored()
+        const digPromise = once(bot2, 'blockUpdate', { array: true })
         bot.dig(bot.blockAt(pos))
 
-        let [, newBlock] = await once(bot2, 'blockUpdate', { array: true })
+        let [, newBlock] = await digPromise
         assertPosEqual(newBlock.position, pos)
         expect(newBlock.type).toEqual(0)
 
-        bot.creative.setInventorySlot(36, new Item(1, 1))
-        await new Promise((resolve) => {
-          bot.inventory.on('windowUpdate', (slot, oldItem, newItem) => {
+        const invPromise = new Promise((resolve) => {
+          bot.inventory.on('updateSlot', (slot, oldItem, newItem) => {
             if (slot === 36 && newItem && newItem.type === 1) { resolve() }
           })
         })
+        bot.creative.setInventorySlot(36, new Item(1, 1))
+        await invPromise
 
+        const placePromise = once(bot2, 'blockUpdate', { array: true })
         bot.placeBlock(bot.blockAt(pos.offset(0, -1, 0)), new Vec3(0, 1, 0));
-
-        [, newBlock] = await once(bot2, 'blockUpdate', { array: true })
+        [, newBlock] = await placePromise
         assertPosEqual(newBlock.position, pos)
         expect(newBlock.type).toEqual(1)
+      })
+
+      test('can open and close a chest', async () => {
+        await Promise.all([waitSpawnZone(bot, 2), onGround(bot), waitSpawnZone(bot2, 2), onGround(bot2)])
+
+        const chestId = mcData.blocksByName.chest.id
+        const [x, y, z] = [1, 2, 3]
+
+        const states = {
+          open: {
+            location: { x, y, z },
+            byte1: 1,
+            byte2: 1, // open
+            blockId: chestId
+          },
+          closed: {
+            location: { x, y, z },
+            byte1: 1,
+            byte2: 0, // closed
+            blockId: chestId
+          }
+        }
+
+        const setBlockPromise = once(bot, 'blockUpdate')
+        bot.chat(`/setblock ${x} ${y} ${z} ${chestId} 2`) // place a chest facing north
+        await setBlockPromise
+
+        const openPromise1 = once(bot._client, 'block_action', { array: true })
+        const openPromise2 = once(bot2._client, 'block_action', { array: true })
+        bot.chat(`/setblockaction ${x} ${y} ${z} 1 1`) // open the chest
+        const [blockActionOpen] = await openPromise1
+        const [blockActionOpen2] = await openPromise2
+        expect(blockActionOpen).toEqual(states.open)
+        expect(blockActionOpen2).toEqual(states.open)
+
+        const closePromise1 = once(bot._client, 'block_action', { array: true })
+        const closePromise2 = once(bot2._client, 'block_action', { array: true })
+        bot.chat(`/setblockaction ${x} ${y} ${z} 1 0`) // close the chest
+        const [blockActionClosed] = await closePromise1
+        const [blockActionClosed2] = await closePromise2
+        expect(blockActionClosed).toEqual(states.closed)
+        expect(blockActionClosed2).toEqual(states.closed)
       })
     })
 
     describe('commands', () => {
-      jest.setTimeout(60 * 1000)
+      jest.setTimeout(120 * 1000)
       test('has an help command', async () => {
-        await waitLoginMessage(bot)
+        await waitMessagePromise('bot joined the game.')
         bot.chat('/help')
         await once(bot, 'message')
       })
@@ -231,34 +251,78 @@ squid.supportedVersions.forEach((supportedVersion, i) => {
           const initialPosition = bot.entity.position.clone()
           bot.chat('/tp ~1 ~-2 ~3')
           await once(bot, 'forcedMove')
-          assertPosEqual(bot.entity.position, initialPosition.offset(1, -2, 3))
+          assertPosEqual(bot.entity.position, initialPosition.offset(1, -2, 3), 2)
         })
         test('can tp somebody else with relative positions', async () => {
           await Promise.all([onGround(bot), onGround(bot2)])
           const initialPosition = bot2.entity.position.clone()
           bot.chat('/tp bot2 ~1 ~-2 ~3')
           await once(bot2, 'forcedMove')
-          assertPosEqual(bot2.entity.position, initialPosition.offset(1, -2, 3))
+          assertPosEqual(bot2.entity.position, initialPosition.offset(1, -2, 3), 2)
         })
       })
       test('can use /deop', async () => {
-        await waitLoginMessage(bot)
+        await waitMessagePromise('bot joined the game.')
         bot.chat('/deop bot')
-        await waitMessage(bot, 'bot is deopped')
+        await waitMessage(bot, '§7§o[Server: Deopped bot]')
         bot.chat('/op bot')
         await waitMessage(bot, 'You do not have permission to use this command')
         serv.getPlayer('bot').op = true
       })
       test('can use /setblock', async () => {
         await Promise.all([waitSpawnZone(bot, 2), onGround(bot)])
-        bot.chat('/setblock 1 2 3 95 0')
-        let [, newBlock] = await once(bot, 'blockUpdate:' + new Vec3(1, 2, 3), { array: true })
-        expect(newBlock.type).toEqual(95)
+        const chestId = mcData.blocksByName.chest.id
+        const p = once(bot, 'blockUpdate:' + new Vec3(1, 2, 3), { array: true })
+        bot.chat(`/setblock 1 2 3 ${chestId} 0`)
+        const [, newBlock] = await p
+        expect(newBlock.type).toEqual(chestId)
       })
       test('can use /xp', async () => {
         bot.chat('/xp 100')
         await once(bot, 'experience')
         expect(bot.experience.points).toEqual(100)
+      })
+      test('can use /give', async () => {
+        bot.chat('/give bot2 1 1')
+        await once(bot2.inventory, 'updateSlot')
+        expect(bot2.inventory.slots[36].type).toEqual(1)
+      })
+      test.skip('can use tabComplete', () => { // TODO to fix
+        return new Promise((resolve, reject) => {
+          bot.tabComplete('/give', (err, data) => {
+            if (err) {
+              return reject(err)
+            }
+            expect(data[0]).toEqual('bot')
+            return resolve()
+          })
+        })
+      })
+
+      function waitMessagePromise (message) {
+        return new Promise((resolve) => {
+          const listener = (msg) => {
+            if (msg.extra[0].text === message) {
+              bot.removeListener('message', listener)
+              resolve()
+            }
+          }
+          bot.on('message', listener)
+        })
+      }
+
+      test('can use /banlist, /ban, /pardon', async () => {
+        await waitMessagePromise('bot joined the game.')
+        bot.chat('/banlist')
+        await waitMessagePromise('There are 0 total banned players')
+        bot.chat('/ban bot2')
+        await waitMessagePromise('bot2 was banned')
+        bot.chat('/banlist')
+        await waitMessagePromise('There are 1 total banned players:')
+        bot.chat('/pardon bot2')
+        await waitMessagePromise('bot2 is unbanned')
+        bot.chat('/banlist')
+        await waitMessagePromise('There are 0 total banned players')
       })
     })
   })

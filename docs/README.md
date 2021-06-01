@@ -2,7 +2,7 @@ flying-squid
 ================
 
 [![NPM version](https://img.shields.io/npm/v/flying-squid.svg)](http://npmjs.com/package/flying-squid)
-[![Build Status](https://img.shields.io/circleci/project/github/PrismarineJS/flying-squid/master.svg)](https://circleci.com/gh/PrismarineJS/flying-squid)
+[![Build Status](https://github.com/PrismarineJS/flying-squid/workflows/CI/badge.svg)](https://github.com/PrismarineJS/flying-squid/actions?query=workflow%3A%22CI%22)
 [![Discord](https://img.shields.io/badge/chat-on%20discord-brightgreen.svg)](https://discord.gg/GsEFRM8)
 [![Gitter](https://img.shields.io/badge/chat-on%20gitter-brightgreen.svg)](https://gitter.im/PrismarineJS/general)
 [![Irc](https://img.shields.io/badge/chat-on%20irc-brightgreen.svg)](https://irc.gitter.im/)
@@ -11,7 +11,7 @@ flying-squid
 Create Minecraft servers with a powerful, stable, and high level JavaScript API.
 
 ## Features
-* Support for Minecraft 1.8 and 1.12
+* Support for Minecraft 1.8, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15 and 1.16
 * Players can see the world
 * Players see each other in-game and in tab
 * Digging
@@ -23,7 +23,7 @@ Create Minecraft servers with a powerful, stable, and high level JavaScript API.
 
 ## Test server
 
-* rom1504.fr (Port 25565) using [auto-squid](https://github.com/rom1504/auto-squid)
+* flying-squid.host (Port 25565) : hosted by @Saiv46
 
 ## Building / Running
 Before running or building it is recommended that you configure the server in `config/settings.json`
@@ -35,6 +35,41 @@ Or try our autoupdating flying-squid server [autonomous-squid](https://github.co
 
 You can also install flying-squid globally with `sudo npm install -g flying-squid`
 and then run it with `flying-squid` command.
+
+### Docker
+
+Docker allows a higer level of isolation, compatibily and consistency. You can learn how to install Docker [here](https://www.docker.com/get-started)
+
+```bash
+docker run prismarinejs/flying-squid
+
+```
+With specific flying-squid configuration, container name and the most important, opening the port to flying-squid:
+
+```bash
+docker run -p 25565:25565 -v $(pwd)/config:/config --name my-flying-squid --rm prismarinejs/flying-squid
+```
+
+[docker-compose](https://docs.docker.com/compose/) is useful to quickly launch & stop a single container with a specific configuration.
+
+```yaml
+version: '3.8'
+
+services:
+  flying-squid:
+    image: prismarinejs/flying-squid
+    volumes:
+       - ${PWD}/config:/config
+    ports:
+      - "25565:25565"
+volumes:
+  flying-squid:
+```
+
+```bash
+docker-compose -f path/to/docker-compose.yaml up
+```
+
 
 ## World generation
 
@@ -56,7 +91,7 @@ Http api available in the test instance at [flying-squid.rom1504.fr](http://flyi
 * [flying-squid-essentials](https://github.com/DeudlyYT/Flying-Squid-Essentials) Plugin that in a future will be like Essentials of bukkit/spigot.
 All the basic commands that a server should have
 * [squidcord](https://github.com/dada513/SquidCord) a bridge between a discord channel and the minecraft server.
-
+* [authme](https://github.com/TheAlan404/flying-squid-authme) an auth plugin for `online-mode=false` servers.
 
 ## Documentation
 For development see the [API documentation](API.md), [CONTRIBUTE.md](CONTRIBUTE.md) and [HISTORY.md](HISTORY.md)
@@ -95,7 +130,7 @@ mcServer.createMCServer({
   },
   'everybody-op': true,
   'max-entities': 100,
-  'version': '1.12.2'
+  'version': '1.16.1'
 })
 ```
 
